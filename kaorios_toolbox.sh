@@ -481,24 +481,29 @@ patch_keystore_spi() {
         return 0
     fi
     
-    # Find engineGetCertificateChain method
-    local method_start=$(grep -n "\.method.*engineGetCertificateChain(Ljava/lang/String;)" "$target_file" | head -1 | cut -d: -f1)
+    # Find engineGetCertificateChain method (may have test-api annotation)
+    local method_start=$(grep -n "\.method.*engineGetCertificateChain" "$target_file" | head -1 | cut -d: -f1)
     if [ -n "$method_start" ]; then
-        # Patch 1: Insert after .registers line
-        local registers_rel=$(tail -n +$method_start "$target_file" | head -n 10 | grep -n "\.registers" | head -1 | cut -d: -f1)
+        echo "[*] Found engineGetCertificateChain at line $method_start"
+        
+        # Patch 1: Insert after .registers or .locals line (search first 20 lines)
+        local registers_rel=$(tail -n +$method_start "$target_file" | head -n 20 | grep -n "\.registers\|\.locals" | head -1 | cut -d: -f1)
         if [ -n "$registers_rel" ]; then
             local insert_at=$((method_start + registers_rel))
-            head -n $((insert_at)) "$target_file" > "${target_file}.tmp"
+            echo "[*] Inserting after registers at line $insert_at"
+            head -n $insert_at "$target_file" > "${target_file}.tmp"
             echo "" >> "${target_file}.tmp"
             echo "    invoke-static {}, Lcom/android/internal/util/kaorios/ToolboxUtils;->KaoriosPropsEngineGetCertificateChain()V" >> "${target_file}.tmp"
             echo "" >> "${target_file}.tmp"
             tail -n +$((insert_at + 1)) "$target_file" >> "${target_file}.tmp"
             mv "${target_file}.tmp" "$target_file"
             echo "[+] Added KaoriosPropsEngineGetCertificateChain call"
+        else
+            echo "[!] WARNING: Could not find .registers/.locals in engineGetCertificateChain"
         fi
         
         # Patch 2: Insert before return-object v3 (re-find method since file changed)
-        method_start=$(grep -n "\.method.*engineGetCertificateChain(Ljava/lang/String;)" "$target_file" | head -1 | cut -d: -f1)
+        method_start=$(grep -n "\.method.*engineGetCertificateChain" "$target_file" | head -1 | cut -d: -f1)
         local method_end=$(tail -n +$method_start "$target_file" | grep -n "^\.end method" | head -1 | cut -d: -f1)
         if [ -n "$method_end" ]; then
             local return_rel=$(tail -n +$method_start "$target_file" | head -n $method_end | grep -n "return-object v3" | head -1 | cut -d: -f1)
@@ -515,6 +520,8 @@ patch_keystore_spi() {
                 echo "[+] Added KaoriosKeybox call before return"
             fi
         fi
+    else
+        echo "[!] WARNING: engineGetCertificateChain method not found"
     fi
     
     echo "[+] Patched AndroidKeyStoreSpi"
