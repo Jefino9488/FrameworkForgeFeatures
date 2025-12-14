@@ -262,19 +262,24 @@ CONSTRUCTOR
     fi
     
     # Step 3: Find hasSystemFeature method and patch it
-    # We need to find the method, change .registers 7 to .registers 12, and insert Kaorios block before sget-object mHasSystemFeatureCache
+    # We need to find the method, change .locals/.registers to .registers 12, and insert Kaorios block before sget-object mHasSystemFeatureCache
     
     # Find line number of "hasSystemFeature(Ljava/lang/String;I)Z"
     local method_start=$(grep -n "\.method.*hasSystemFeature(Ljava/lang/String;I)Z" "$target_file" | head -1 | cut -d: -f1)
     
     if [ -n "$method_start" ]; then
-        # Find the .registers line in this method (first few lines after method start)
-        local registers_line=$(tail -n +$method_start "$target_file" | head -n 10 | grep -n "\.registers" | head -1 | cut -d: -f1)
-        if [ -n "$registers_line" ]; then
-            local actual_registers_line=$((method_start + registers_line - 1))
-            # Replace .registers X with .registers 12
-            sed -i "${actual_registers_line}s/.registers [0-9]*/.registers 12/" "$target_file"
-            echo "[+] Changed .registers to 12 in hasSystemFeature"
+        echo "[*] Found hasSystemFeature method at line $method_start"
+        
+        # Find the .registers OR .locals line in this method (first few lines after method start)
+        local reg_rel_line=$(tail -n +$method_start "$target_file" | head -n 10 | grep -n "\.registers\|\.locals" | head -1 | cut -d: -f1)
+        if [ -n "$reg_rel_line" ]; then
+            local actual_reg_line=$((method_start + reg_rel_line - 1))
+            # Replace .registers X or .locals X with .registers 12
+            sed -i "${actual_reg_line}s/\.registers [0-9]*/.registers 12/" "$target_file"
+            sed -i "${actual_reg_line}s/\.locals [0-9]*/.registers 12/" "$target_file"
+            echo "[+] Changed .locals/.registers to .registers 12 in hasSystemFeature (line $actual_reg_line)"
+        else
+            echo "[!] WARNING: Could not find .registers/.locals in hasSystemFeature"
         fi
         
         # Find the sget-object mHasSystemFeatureCache line (relative to method start)
