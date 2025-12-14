@@ -197,17 +197,25 @@ patch_apm() {
         return 0
     fi
     
-    # Relocate to last smali dir
+    # Relocate to last smali dir (following kaorios_patches.sh approach)
+    local current_smali_dir=$(echo "$target_file" | sed -E 's|(.*/smali(_classes[0-9]*)?)/.*|\1|')
     local last_smali_dir=$(get_last_smali_dir "$FW_WORK_DIR")
-    local current_dir=$(dirname "$target_file")
     local target_root="$FW_WORK_DIR/$last_smali_dir"
     
-    if [ "$current_dir" != "$target_root/android/app" ]; then
+    if [ "$current_smali_dir" != "$target_root" ]; then
         echo "[*] Relocating ApplicationPackageManager to $last_smali_dir..."
-        mkdir -p "$target_root/android/app"
-        mv "$current_dir"/ApplicationPackageManager*.smali "$target_root/android/app/" 2>/dev/null
-        target_file="$target_root/android/app/ApplicationPackageManager.smali"
-        echo "[+] Relocated ApplicationPackageManager"
+        
+        # Create destination directory
+        local new_dir="$target_root/android/app"
+        mkdir -p "$new_dir"
+        
+        # Move main class and all inner classes
+        local src_dir=$(dirname "$target_file")
+        local file_count=$(ls -1 "$src_dir"/ApplicationPackageManager*.smali 2>/dev/null | wc -l)
+        mv "$src_dir"/ApplicationPackageManager*.smali "$new_dir/" 2>/dev/null
+        
+        target_file="$new_dir/ApplicationPackageManager.smali"
+        echo "[+] Relocated ApplicationPackageManager and $file_count inner class files to $last_smali_dir"
     fi
     
     # Check if already patched
