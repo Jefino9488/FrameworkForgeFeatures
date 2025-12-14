@@ -164,11 +164,7 @@ download_kaorios_components() {
 # ==================== EXTRACT UTILITY CLASSES ====================
 # Utility smali classes come from classes.dex, NOT from the APK
 # Uses run_jar + baksmali from the DI environment to decompile DEX
-# Downloads baksmali.jar if not found
-
-# Use baksmali v2.5.2 (v2.x uses org.jf.baksmali.Main which works with dalvikvm)
-# v3.x uses com.android.tools.smali.baksmali.Main which doesn't work with dalvikvm
-BAKSMALI_VERSION="2.5.2"
+# Baksmali is now bundled with DI assets (DEXed for dalvikvm compatibility)
 
 extract_utility_classes() {
     echo "[*] Extracting Kaorios utility classes from classes.dex..."
@@ -182,9 +178,10 @@ extract_utility_classes() {
         return 1
     fi
     
-    # Find baksmali in DI environment or download it
+    # Find baksmali in DI environment (bundled with app assets)
+    # DI installs to $l (/data/tmp/di/bin)
     local baksmali_jar=""
-    for jar in "$l"/baksmali*.jar "$DI_BIN"/baksmali*.jar /data/tmp/di/bin/baksmali*.jar "$TMP"/baksmali*.jar; do
+    for jar in "$l/baksmali.jar" "$DI_BIN/baksmali.jar" /data/tmp/di/bin/baksmali.jar "$TMP/baksmali.jar"; do
         if [ -f "$jar" ]; then
             baksmali_jar="$jar"
             echo "[*] Found baksmali: $baksmali_jar"
@@ -192,62 +189,24 @@ extract_utility_classes() {
         fi
     done
     
-    # If baksmali not found, download it
+    # baksmali should be bundled with DI - if not found, it's an installation issue
     if [ -z "$baksmali_jar" ]; then
-        echo "[*] baksmali.jar not found, downloading v${BAKSMALI_VERSION}..."
-        # URL format for v2.x: https://github.com/baksmali/smali/releases/download/v{version}/baksmali-{version}.jar
-        local baksmali_download_url="https://github.com/baksmali/smali/releases/download/v${BAKSMALI_VERSION}/baksmali-${BAKSMALI_VERSION}.jar"
-        baksmali_jar="$TMP/baksmali.jar"
-        
-        echo "[*] Downloading from: $baksmali_download_url"
-        if command -v curl >/dev/null 2>&1; then
-            curl -sL -o "$baksmali_jar" "$baksmali_download_url"
-        else
-            wget -q -O "$baksmali_jar" "$baksmali_download_url"
-        fi
-        
-        if [ ! -f "$baksmali_jar" ] || [ ! -s "$baksmali_jar" ]; then
-            echo "[!] ERROR: Failed to download baksmali.jar"
-            echo "[*] Falling back to using apktool..."
-            
-            # Fallback: Create a minimal APK structure with the DEX
-            local temp_apk="$KAORIOS_WORK_DIR/temp_dex.apk"
-            
-            # Create a minimal APK by just wrapping the DEX  
-            # First create AndroidManifest.xml minimal content (just copy dex as-is in archive)
-            create_dir "$KAORIOS_WORK_DIR/temp_apk"
-            cp "$dex_path" "$KAORIOS_WORK_DIR/temp_apk/classes.dex"
-            
-            # Use DI's zip functionality (7za or similar)
-            if command -v 7za >/dev/null 2>&1; then
-                (cd "$KAORIOS_WORK_DIR/temp_apk" && 7za a -tzip "$temp_apk" classes.dex >/dev/null 2>&1)
-            else
-                # Try using apktool's internal zip via java
-                echo "[!] Cannot create temp APK without 7za or zip"
-                return 1
-            fi
-            
-            if [ -f "$temp_apk" ]; then
-                echo "[*] Using apktool to decompile DEX..."
-                dynamic_apktool -decompile "$temp_apk" -o "$DEX_EXTRACT_DIR"
-            else
-                echo "[!] ERROR: Could not create temporary APK"
-                return 1
-            fi
-        else
-            echo "[+] Downloaded baksmali.jar successfully"
-        fi
+        echo "[!] ERROR: baksmali.jar not found in DI environment"
+        echo "    Searched: $l/baksmali.jar"
+        echo "    Available JARs in DI:"
+        ls -la "$l"/*.jar 2>/dev/null
+        echo ""
+        echo "    This is likely a DI installation issue. Try reinstalling the app."
+        return 1
     fi
     
-    # Use run_jar to invoke baksmali if we have it
-    if [ -f "$baksmali_jar" ]; then
-        echo "[*] Decompiling classes.dex using baksmali..."
-        if run_jar "$baksmali_jar" d "$dex_path" -o "$DEX_EXTRACT_DIR/smali"; then
-            echo "[+] baksmali completed successfully"
-        else
-            echo "[!] ERROR: baksmali failed to decompile classes.dex"
-            return 1
-        fi
+    # Use run_jar to invoke baksmali
+    echo "[*] Decompiling classes.dex using baksmali..."
+    if run_jar "$baksmali_jar" d "$dex_path" -o "$DEX_EXTRACT_DIR/smali"; then
+        echo "[+] baksmali completed successfully"
+    else
+        echo "[!] ERROR: baksmali failed to decompile classes.dex"
+        return 1
     fi
     
     if [ ! -d "$DEX_EXTRACT_DIR/smali" ] || [ -z "$(ls -A "$DEX_EXTRACT_DIR/smali" 2>/dev/null)" ]; then
