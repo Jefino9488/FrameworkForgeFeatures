@@ -577,7 +577,7 @@ if [ -f "$KAORIOS_WORK_DIR/KaoriosToolbox.apk" ]; then
     add_to_module "$KAORIOS_WORK_DIR/KaoriosToolbox.apk" "system/system_ext/priv-app/KaoriosToolbox/KaoriosToolbox.apk" "apk"
     
     mkdir -p "$TMP/apk_extract"
-    unzip -q "$KAORIOS_WORK_DIR/KaoriosToolbox.apk" "lib/*" -d "$TMP/apk_extract" 2>/dev/null
+    unzip -o -q "$KAORIOS_WORK_DIR/KaoriosToolbox.apk" "lib/*" -d "$TMP/apk_extract" 2>/dev/null
     
     for arch in arm64-v8a armeabi-v7a x86 x86_64; do
         arch_short=$(echo "$arch" | sed 's/arm64-v8a/arm64/;s/armeabi-v7a/arm/;s/x86_64/x86_64/;s/x86$/x86/')
