@@ -45,12 +45,16 @@ get_last_smali_dir() {
     echo "$target_smali_dir"
 }
 
-# ==================== STEP 1: DOWNLOAD COMPONENTS ====================
-echo "[*] Step 1: Downloading Kaorios Toolbox components..."
+# ==================== STEP 1: DOWNLOAD COMPONENTS (WITH CACHING) ====================
+echo "[*] Step 1: Checking Kaorios Toolbox components..."
+
+# Persistent cache directory (survives between runs)
+KAORIOS_CACHE_DIR="/data/local/tmp/frameworkforge/kaorios_cache"
+KAORIOS_VERSION_FILE="$KAORIOS_CACHE_DIR/version.txt"
 
 download_kaorios_components() {
     echo "[*] Fetching Kaorios Toolbox release information..."
-    mkdir -p "$KAORIOS_WORK_DIR" "$UTILS_DIR"
+    mkdir -p "$KAORIOS_WORK_DIR" "$UTILS_DIR" "$KAORIOS_CACHE_DIR"
     
     local release_info="$KAORIOS_WORK_DIR/release.json"
     
@@ -68,8 +72,48 @@ download_kaorios_components() {
         return 1
     fi
     
-    local version=$(grep -o '"tag_name": *"[^"]*"' "$release_info" | head -1 | sed 's/"tag_name": *"\(.*\)"/\1/')
-    echo "[*] Latest version: $version"
+    local latest_version=$(grep -o '"tag_name": *"[^"]*"' "$release_info" | head -1 | sed 's/"tag_name": *"\(.*\)"/\1/')
+    echo "[*] Latest version: $latest_version"
+    
+    # Check if we have a cached version
+    local cached_version=""
+    if [ -f "$KAORIOS_VERSION_FILE" ]; then
+        cached_version=$(cat "$KAORIOS_VERSION_FILE")
+        echo "[*] Cached version: $cached_version"
+    fi
+    
+    # Check if all cached files exist
+    local cache_valid=true
+    if [ ! -f "$KAORIOS_CACHE_DIR/KaoriosToolbox.apk" ] || \
+       [ ! -f "$KAORIOS_CACHE_DIR/privapp_whitelist_com.kousei.kaorios.xml" ] || \
+       [ ! -f "$KAORIOS_CACHE_DIR/classes.dex" ]; then
+        cache_valid=false
+        echo "[*] Cache incomplete, will download files"
+    fi
+    
+    # If cached version matches and all files exist, use cache
+    if [ "$cached_version" = "$latest_version" ] && [ "$cache_valid" = "true" ]; then
+        echo "[+] Using cached version $cached_version"
+        cp "$KAORIOS_CACHE_DIR/KaoriosToolbox.apk" "$KAORIOS_WORK_DIR/"
+        cp "$KAORIOS_CACHE_DIR/privapp_whitelist_com.kousei.kaorios.xml" "$KAORIOS_WORK_DIR/"
+        cp "$KAORIOS_CACHE_DIR/classes.dex" "$KAORIOS_WORK_DIR/"
+        echo "[+] Kaorios components loaded from cache"
+        return 0
+    fi
+    
+    # Backup old version if exists
+    if [ -n "$cached_version" ] && [ "$cached_version" != "$latest_version" ] && [ "$cache_valid" = "true" ]; then
+        local backup_dir="$KAORIOS_CACHE_DIR/backup_$cached_version"
+        echo "[*] Backing up old version $cached_version..."
+        mkdir -p "$backup_dir"
+        mv "$KAORIOS_CACHE_DIR/KaoriosToolbox.apk" "$backup_dir/" 2>/dev/null
+        mv "$KAORIOS_CACHE_DIR/privapp_whitelist_com.kousei.kaorios.xml" "$backup_dir/" 2>/dev/null
+        mv "$KAORIOS_CACHE_DIR/classes.dex" "$backup_dir/" 2>/dev/null
+        echo "[+] Old version backed up to $backup_dir"
+    fi
+    
+    # Download new version
+    echo "[*] Downloading new version $latest_version..."
     
     local apk_url=$(grep -o '"browser_download_url": *"[^"]*KaoriosToolbox[^"]*\.apk"' "$release_info" | head -1 | sed 's/"browser_download_url": *"\(.*\)"/\1/')
     local xml_url=$(grep -o '"browser_download_url": *"[^"]*privapp_whitelist[^"]*\.xml"' "$release_info" | head -1 | sed 's/"browser_download_url": *"\(.*\)"/\1/')
@@ -87,26 +131,34 @@ download_kaorios_components() {
     
     echo "[*] Downloading KaoriosToolbox.apk..."
     if command -v curl >/dev/null 2>&1; then
-        curl -sL -o "$KAORIOS_WORK_DIR/KaoriosToolbox.apk" "$apk_url"
+        curl -sL -o "$KAORIOS_CACHE_DIR/KaoriosToolbox.apk" "$apk_url"
     else
-        wget -q -O "$KAORIOS_WORK_DIR/KaoriosToolbox.apk" "$apk_url"
+        wget -q -O "$KAORIOS_CACHE_DIR/KaoriosToolbox.apk" "$apk_url"
     fi
     
     echo "[*] Downloading permission XML..."
     if command -v curl >/dev/null 2>&1; then
-        curl -sL -o "$KAORIOS_WORK_DIR/privapp_whitelist_com.kousei.kaorios.xml" "$xml_url"
+        curl -sL -o "$KAORIOS_CACHE_DIR/privapp_whitelist_com.kousei.kaorios.xml" "$xml_url"
     else
-        wget -q -O "$KAORIOS_WORK_DIR/privapp_whitelist_com.kousei.kaorios.xml" "$xml_url"
+        wget -q -O "$KAORIOS_CACHE_DIR/privapp_whitelist_com.kousei.kaorios.xml" "$xml_url"
     fi
     
     echo "[*] Downloading classes.dex..."
     if command -v curl >/dev/null 2>&1; then
-        curl -sL -o "$KAORIOS_WORK_DIR/classes.dex" "$dex_url"
+        curl -sL -o "$KAORIOS_CACHE_DIR/classes.dex" "$dex_url"
     else
-        wget -q -O "$KAORIOS_WORK_DIR/classes.dex" "$dex_url"
+        wget -q -O "$KAORIOS_CACHE_DIR/classes.dex" "$dex_url"
     fi
     
-    echo "[+] All Kaorios components downloaded successfully"
+    # Update version file
+    echo "$latest_version" > "$KAORIOS_VERSION_FILE"
+    
+    # Copy to work directory
+    cp "$KAORIOS_CACHE_DIR/KaoriosToolbox.apk" "$KAORIOS_WORK_DIR/"
+    cp "$KAORIOS_CACHE_DIR/privapp_whitelist_com.kousei.kaorios.xml" "$KAORIOS_WORK_DIR/"
+    cp "$KAORIOS_CACHE_DIR/classes.dex" "$KAORIOS_WORK_DIR/"
+    
+    echo "[+] All Kaorios components downloaded and cached ($latest_version)"
     return 0
 }
 
