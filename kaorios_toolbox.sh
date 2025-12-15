@@ -597,6 +597,19 @@ if [ -f "$KAORIOS_WORK_DIR/privapp_whitelist_com.kousei.kaorios.xml" ]; then
     add_to_module "$KAORIOS_WORK_DIR/privapp_whitelist_com.kousei.kaorios.xml" "system/system_ext/etc/permissions/privapp_whitelist_com.kousei.kaorios.xml" "xml"
 fi
 
+# Add Kaorios system properties to module's system.prop
+echo "[*] Adding Kaorios system properties..."
+mkdir -p "$TMP/kaorios_props"
+cat > "$TMP/kaorios_props/system.prop" << 'KAORIOSPROPS'
+# Kaorios Toolbox
+persist.sys.kaorios=kousei
+# Required for privapp permissions - leave value blank
+ro.control_privapp_permissions=
+KAORIOSPROPS
+# Register system.prop to be merged with module's system.prop
+add_to_module "$TMP/kaorios_props/system.prop" "system.prop" "props"
+echo "[+] System properties added"
+
 echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"
 echo "║      Kaorios Toolbox patches applied successfully!             ║"
