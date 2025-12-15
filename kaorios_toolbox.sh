@@ -271,7 +271,8 @@ CONSTRUCTOR
         echo "[*] Found hasSystemFeature method at line $method_start"
         
         # Find the .registers OR .locals line in this method (first few lines after method start)
-        local reg_rel_line=$(tail -n +$method_start "$target_file" | head -n 10 | grep -n "\.registers\|\.locals" | head -1 | cut -d: -f1)
+        # Use grep -E for extended regex to support | (OR) pattern
+        local reg_rel_line=$(tail -n +$method_start "$target_file" | head -n 10 | grep -E -n '\.registers|\.locals' | head -1 | cut -d: -f1)
         if [ -n "$reg_rel_line" ]; then
             local actual_reg_line=$((method_start + reg_rel_line - 1))
             # Replace .registers X or .locals X with .registers 12
@@ -500,7 +501,8 @@ patch_keystore_spi() {
         echo "[*] Found engineGetCertificateChain at line $method_start"
         
         # Patch 1: Insert after .registers or .locals line (search first 20 lines)
-        local registers_rel=$(tail -n +$method_start "$target_file" | head -n 20 | grep -n "\.registers\|\.locals" | head -1 | cut -d: -f1)
+        # Use grep -E for extended regex to support | (OR) pattern
+        local registers_rel=$(tail -n +$method_start "$target_file" | head -n 20 | grep -E -n '\.registers|\.locals' | head -1 | cut -d: -f1)
         if [ -n "$registers_rel" ]; then
             local insert_at=$((method_start + registers_rel))
             echo "[*] Inserting after registers at line $insert_at"
@@ -551,7 +553,13 @@ patch_keystore_spi
 echo ""
 echo "[*] Step 6: Recompiling framework.jar..."
 
-dynamic_apktool -r "$FW_WORK_DIR" -o "$TMP/framework_patched.jar"
+# OOM mitigation: Free memory before recompilation
+sync
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+
+# Use -j 2 to limit threads and prevent OOM during recompilation of large framework.jar
+# dynamic_apktool passes unrecognized flags to apktool
+dynamic_apktool -r "$FW_WORK_DIR" -o "$TMP/framework_patched.jar" -j 2
 
 if [ ! -f "$TMP/framework_patched.jar" ]; then
     echo "[!] ERROR: framework.jar recompilation failed"
