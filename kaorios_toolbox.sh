@@ -559,9 +559,10 @@ echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 
 # Use -j 2 to limit threads and prevent OOM during recompilation of large framework.jar
 # dynamic_apktool passes unrecognized flags to apktool
-dynamic_apktool -r "$FW_WORK_DIR" -o "$TMP/framework_patched.jar" -j 2
+# Output directly to $FRAMEWORK (DI convention - modifies input file in place)
+dynamic_apktool -r "$FW_WORK_DIR" -o "$FRAMEWORK" -j 2
 
-if [ ! -f "$TMP/framework_patched.jar" ]; then
+if [ ! -f "$FRAMEWORK" ]; then
     echo "[!] ERROR: framework.jar recompilation failed"
     return 1
 fi
@@ -571,8 +572,6 @@ echo "[+] Kaorios Toolbox patches applied successfully!"
 # ==================== STEP 7: REGISTER MODULE EXTRAS ====================
 echo ""
 echo "[*] Step 7: Registering module extras..."
-
-cp "$TMP/framework_patched.jar" "$OUTPUT/framework.jar"
 
 if [ -f "$KAORIOS_WORK_DIR/KaoriosToolbox.apk" ]; then
     add_to_module "$KAORIOS_WORK_DIR/KaoriosToolbox.apk" "system/system_ext/priv-app/KaoriosToolbox/KaoriosToolbox.apk" "apk"
