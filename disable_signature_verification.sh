@@ -11,10 +11,6 @@ if [ -z "$FRAMEWORK" ] && [ -z "$SERVICES" ]; then
     return 1
 fi
 
-FW_WORK_DIR="$TMP/fw_dc"
-SVC_WORK_DIR="$TMP/svc_dc"
-MIUI_WORK_DIR="$TMP/miui_dc"
-
 # Method body replacements
 return_true='
     .registers 8
@@ -33,185 +29,187 @@ return_void='
 
 # ==================== FRAMEWORK.JAR ====================
 if [ -n "$FRAMEWORK" ]; then
-    echo "[*] Decompiling framework.jar..."
-    dynamic_apktool -decompile "$FRAMEWORK" -o "$FW_WORK_DIR"
+    echo "[*] Patching framework.jar..."
+    
+    # Get pre-decompiled workspace (managed by run.sh)
+    FW_WORK_DIR=$(get_workspace_path "framework.jar")
 
     if [ ! -d "$FW_WORK_DIR" ]; then
-        echo "[!] ERROR: framework.jar decompilation failed"
-    else
-        echo "[*] Applying patches to framework.jar..."
-
-        # PackageParser patches
-        echo "[*] Patch 1.1: Bypass Certificate Verification..."
-        smali_kit -c -m "collectCertificates" -bl "ApkSignatureVerifier;->unsafeGetCertsWithoutVerification" "    const/4 v1, 0x1" -d "$FW_WORK_DIR" -name "PackageParser.smali"
-
-        echo "[*] Patch 1.2: Bypass Shared User ID Validation..."
-        smali_kit -c -m "parseBaseApk" -bl "if-nez v14," "    const/4 v14, 0x1" -d "$FW_WORK_DIR" -name "PackageParser.smali"
-
-        echo "[*] Patch 2.1: Suppress Parse Errors..."
-        smali_kit -c -m "<init>" -bl "iput p1, p0" "    const/4 p1, 0x0" -d "$FW_WORK_DIR" -name 'PackageParser$PackageParserException.smali'
-
-        # SigningDetails patches
-        echo "[*] Patch 3.1: Force checkCapability (P\$SD)..."
-        smali_kit -c -m "checkCapability" -re "$return_true" -d "$FW_WORK_DIR" -name 'PackageParser$SigningDetails.smali'
-
-        echo "[*] Patch 3.2: Force checkCapability (SD)..."
-        smali_kit -c -m "checkCapability" -re "$return_true" -d "$FW_WORK_DIR" -name "SigningDetails.smali"
-        
-        echo "[*] Patch 3.x: Force checkCapabilityRecover..."
-        smali_kit -c -m "checkCapabilityRecover" -re "$return_true" -d "$FW_WORK_DIR" -name "SigningDetails.smali"
-        
-        echo "[*] Patch 3.3: Bypass Ancestor Verification..."
-        smali_kit -c -m "hasAncestorOrSelf" -re "$return_true" -d "$FW_WORK_DIR" -name "SigningDetails.smali"
-
-        # V2 Signature Verification - add const after MessageDigest.isEqual
-        echo "[*] Patch 4.1: Bypass V2 Signature Verification..."
-        v2_file=$(find "$FW_WORK_DIR" -name "ApkSignatureSchemeV2Verifier.smali" -type f | head -1)
-        if [ -n "$v2_file" ]; then
-            awk '
-            BEGIN { found = 0; done = 0 }
-            {
-                print $0
-                if (!done && /MessageDigest;->isEqual/) { found = 1 }
-                else if (found && !done && /move-result v0/) {
-                    print "    const/4 v0, 0x1"
-                    done = 1; found = 0
-                }
-            }
-            ' "$v2_file" > "${v2_file}.tmp" && mv "${v2_file}.tmp" "$v2_file"
-            echo "    Edited: $v2_file"
-        fi
-
-        # V3 Signature Verification
-        echo "[*] Patch 4.2: Bypass V3 Signature Verification..."
-        v3_file=$(find "$FW_WORK_DIR" -name "ApkSignatureSchemeV3Verifier.smali" -type f | head -1)
-        if [ -n "$v3_file" ]; then
-            awk '
-            BEGIN { found = 0; done = 0 }
-            {
-                print $0
-                if (!done && /MessageDigest;->isEqual/) { found = 1 }
-                else if (found && !done && /move-result v0/) {
-                    print "    const/4 v0, 0x1"
-                    done = 1; found = 0
-                }
-            }
-            ' "$v3_file" > "${v3_file}.tmp" && mv "${v3_file}.tmp" "$v3_file"
-            echo "    Edited: $v3_file"
-        fi
-
-        # ApkSignatureVerifier patches
-        echo "[*] Patch 5.1: Set Minimum Signature Scheme to V1..."
-        smali_kit -c -m "getMinimumSignatureSchemeVersionForTargetSdk" -re "$return_false" -d "$FW_WORK_DIR" -name "ApkSignatureVerifier.smali"
-
-        echo "[*] Patch 5.2: Disable V1 Signature Verification..."
-        smali_kit -c -m "verify" -bl "ApkSignatureVerifier;->verifyV1Signature" "    const p3, 0x0" -d "$FW_WORK_DIR" -name "ApkSignatureVerifier.smali"
-
-        # ApkSigningBlockUtils - uses v7 register
-        echo "[*] Patch 6.1: Bypass Signing Block Verification..."
-        block_file=$(find "$FW_WORK_DIR" -name "ApkSigningBlockUtils.smali" -type f | head -1)
-        if [ -n "$block_file" ]; then
-            awk '
-            BEGIN { found = 0; done = 0 }
-            {
-                print $0
-                if (!done && /MessageDigest;->isEqual/) { found = 1 }
-                else if (found && !done && /move-result v7/) {
-                    print "    const/4 v7, 0x1"
-                    done = 1; found = 0
-                }
-            }
-            ' "$block_file" > "${block_file}.tmp" && mv "${block_file}.tmp" "$block_file"
-            echo "    Edited: $block_file"
-        fi
-
-        # StrictJarVerifier - replace private static method body
-        echo "[*] Patch 7.1: Bypass JAR Digest Verification..."
-        verifier_file=$(find "$FW_WORK_DIR" -name "StrictJarVerifier.smali" -type f | head -1)
-        if [ -n "$verifier_file" ]; then
-            awk '
-            BEGIN { in_target_method = 0; skip_body = 0 }
-            /\.method private static.*verifyMessageDigest\(\[B\[B\)Z/ {
-                in_target_method = 1; skip_body = 1
-                print $0
-                print "    .registers 2"
-                print ""
-                print "    const/4 v0, 0x1"
-                print ""
-                print "    return v0"
-                next
-            }
-            in_target_method && /\.end method/ {
-                in_target_method = 0; skip_body = 0
-                print $0
-                next
-            }
-            !skip_body { print $0 }
-            ' "$verifier_file" > "${verifier_file}.tmp" && mv "${verifier_file}.tmp" "$verifier_file"
-            echo "    Edited: $verifier_file"
-        fi
-
-        # StrictJarFile - delete manifest entry check
-        echo "[*] Patch 8.1: Remove Manifest Entry Check..."
-        smali_kit -c -m "<init>" -dim "if-eqz v6, :cond_56" -d "$FW_WORK_DIR" -name "StrictJarFile.smali"
-        smali_kit -c -m "<init>" -dim ":cond_56" -d "$FW_WORK_DIR" -name "StrictJarFile.smali"
-
-        # ParsingPackageUtils
-        echo "[*] Patch 9.1: Bypass Shared User (ParsingPackageUtils)..."
-        smali_kit -c -m "parseBaseApkTag" -bl "if-eqz v4," "    const/4 v4, 0x0" -d "$FW_WORK_DIR" -name "ParsingPackageUtils.smali"
-
-        echo "[*] Recompiling framework.jar..."
-        dynamic_apktool -recompile "$FW_WORK_DIR" -o "$FRAMEWORK"
-        [ $? -ne 0 ] && echo "[!] ERROR: framework.jar recompilation failed"
-        delete_recursive "$FW_WORK_DIR"
+        echo "[!] ERROR: framework.jar workspace not found"
+        return 1
     fi
+
+    echo "[*] Applying patches to framework.jar..."
+
+    # PackageParser patches
+    echo "[*] Patch 1.1: Bypass Certificate Verification..."
+    smali_kit -c -m "collectCertificates" -bl "ApkSignatureVerifier;->unsafeGetCertsWithoutVerification" "    const/4 v1, 0x1" -d "$FW_WORK_DIR" -name "PackageParser.smali"
+
+    echo "[*] Patch 1.2: Bypass Shared User ID Validation..."
+    smali_kit -c -m "parseBaseApk" -bl "if-nez v14," "    const/4 v14, 0x1" -d "$FW_WORK_DIR" -name "PackageParser.smali"
+
+    echo "[*] Patch 2.1: Suppress Parse Errors..."
+    smali_kit -c -m "<init>" -bl "iput p1, p0" "    const/4 p1, 0x0" -d "$FW_WORK_DIR" -name 'PackageParser$PackageParserException.smali'
+
+    # SigningDetails patches
+    echo "[*] Patch 3.1: Force checkCapability (P\$SD)..."
+    smali_kit -c -m "checkCapability" -re "$return_true" -d "$FW_WORK_DIR" -name 'PackageParser$SigningDetails.smali'
+
+    echo "[*] Patch 3.2: Force checkCapability (SD)..."
+    smali_kit -c -m "checkCapability" -re "$return_true" -d "$FW_WORK_DIR" -name "SigningDetails.smali"
+    
+    echo "[*] Patch 3.x: Force checkCapabilityRecover..."
+    smali_kit -c -m "checkCapabilityRecover" -re "$return_true" -d "$FW_WORK_DIR" -name "SigningDetails.smali"
+    
+    echo "[*] Patch 3.3: Bypass Ancestor Verification..."
+    smali_kit -c -m "hasAncestorOrSelf" -re "$return_true" -d "$FW_WORK_DIR" -name "SigningDetails.smali"
+
+    # V2 Signature Verification - add const after MessageDigest.isEqual
+    echo "[*] Patch 4.1: Bypass V2 Signature Verification..."
+    v2_file=$(find "$FW_WORK_DIR" -name "ApkSignatureSchemeV2Verifier.smali" -type f | head -1)
+    if [ -n "$v2_file" ]; then
+        awk '
+        BEGIN { found = 0; done = 0 }
+        {
+            print $0
+            if (!done && /MessageDigest;->isEqual/) { found = 1 }
+            else if (found && !done && /move-result v0/) {
+                print "    const/4 v0, 0x1"
+                done = 1; found = 0
+            }
+        }
+        ' "$v2_file" > "${v2_file}.tmp" && mv "${v2_file}.tmp" "$v2_file"
+        echo "    Edited: $v2_file"
+    fi
+
+    # V3 Signature Verification
+    echo "[*] Patch 4.2: Bypass V3 Signature Verification..."
+    v3_file=$(find "$FW_WORK_DIR" -name "ApkSignatureSchemeV3Verifier.smali" -type f | head -1)
+    if [ -n "$v3_file" ]; then
+        awk '
+        BEGIN { found = 0; done = 0 }
+        {
+            print $0
+            if (!done && /MessageDigest;->isEqual/) { found = 1 }
+            else if (found && !done && /move-result v0/) {
+                print "    const/4 v0, 0x1"
+                done = 1; found = 0
+            }
+        }
+        ' "$v3_file" > "${v3_file}.tmp" && mv "${v3_file}.tmp" "$v3_file"
+        echo "    Edited: $v3_file"
+    fi
+
+    # ApkSignatureVerifier patches
+    echo "[*] Patch 5.1: Set Minimum Signature Scheme to V1..."
+    smali_kit -c -m "getMinimumSignatureSchemeVersionForTargetSdk" -re "$return_false" -d "$FW_WORK_DIR" -name "ApkSignatureVerifier.smali"
+
+    echo "[*] Patch 5.2: Disable V1 Signature Verification..."
+    smali_kit -c -m "verify" -bl "ApkSignatureVerifier;->verifyV1Signature" "    const p3, 0x0" -d "$FW_WORK_DIR" -name "ApkSignatureVerifier.smali"
+
+    # ApkSigningBlockUtils - uses v7 register
+    echo "[*] Patch 6.1: Bypass Signing Block Verification..."
+    block_file=$(find "$FW_WORK_DIR" -name "ApkSigningBlockUtils.smali" -type f | head -1)
+    if [ -n "$block_file" ]; then
+        awk '
+        BEGIN { found = 0; done = 0 }
+        {
+            print $0
+            if (!done && /MessageDigest;->isEqual/) { found = 1 }
+            else if (found && !done && /move-result v7/) {
+                print "    const/4 v7, 0x1"
+                done = 1; found = 0
+            }
+        }
+        ' "$block_file" > "${block_file}.tmp" && mv "${block_file}.tmp" "$block_file"
+        echo "    Edited: $block_file"
+    fi
+
+    # StrictJarVerifier - replace private static method body
+    echo "[*] Patch 7.1: Bypass JAR Digest Verification..."
+    verifier_file=$(find "$FW_WORK_DIR" -name "StrictJarVerifier.smali" -type f | head -1)
+    if [ -n "$verifier_file" ]; then
+        awk '
+        BEGIN { in_target_method = 0; skip_body = 0 }
+        /\.method private static.*verifyMessageDigest\(\[B\[B\)Z/ {
+            in_target_method = 1; skip_body = 1
+            print $0
+            print "    .registers 2"
+            print ""
+            print "    const/4 v0, 0x1"
+            print ""
+            print "    return v0"
+            next
+        }
+        in_target_method && /\.end method/ {
+            in_target_method = 0; skip_body = 0
+            print $0
+            next
+        }
+        !skip_body { print $0 }
+        ' "$verifier_file" > "${verifier_file}.tmp" && mv "${verifier_file}.tmp" "$verifier_file"
+        echo "    Edited: $verifier_file"
+    fi
+
+    # StrictJarFile - delete manifest entry check
+    echo "[*] Patch 8.1: Remove Manifest Entry Check..."
+    smali_kit -c -m "<init>" -dim "if-eqz v6, :cond_56" -d "$FW_WORK_DIR" -name "StrictJarFile.smali"
+    smali_kit -c -m "<init>" -dim ":cond_56" -d "$FW_WORK_DIR" -name "StrictJarFile.smali"
+
+    # ParsingPackageUtils
+    echo "[*] Patch 9.1: Bypass Shared User (ParsingPackageUtils)..."
+    smali_kit -c -m "parseBaseApkTag" -bl "if-eqz v4," "    const/4 v4, 0x0" -d "$FW_WORK_DIR" -name "ParsingPackageUtils.smali"
+
+    echo "[+] framework.jar patches applied (recompilation handled centrally)"
 fi
 
 # ==================== SERVICES.JAR ====================
 if [ -n "$SERVICES" ]; then
-    echo "[*] Decompiling services.jar..."
-    dynamic_apktool -decompile "$SERVICES" -o "$SVC_WORK_DIR"
+    echo "[*] Patching services.jar..."
+    
+    # Get pre-decompiled workspace (managed by run.sh)
+    SVC_WORK_DIR=$(get_workspace_path "services.jar")
 
     if [ ! -d "$SVC_WORK_DIR" ]; then
-        echo "[!] ERROR: services.jar decompilation failed"
-    else
-        echo "[*] Applying patches to services.jar..."
-
-        echo "[*] Patch 1.1: Disable checkDowngrade..."
-        smali_kit -c -m "checkDowngrade" -re "$return_void" -d "$SVC_WORK_DIR" -name "PackageManagerServiceUtils.smali"
-
-        echo "[*] Patch 1.2: Bypass verifySignatures..."
-        smali_kit -c -m "verifySignatures" -re "$return_false" -d "$SVC_WORK_DIR" -name "PackageManagerServiceUtils.smali"
-
-        echo "[*] Patch 1.3: Bypass compareSignatures..."
-        smali_kit -c -m "compareSignatures" -re "$return_false" -d "$SVC_WORK_DIR" -name "PackageManagerServiceUtils.smali"
-
-        echo "[*] Patch 1.4: Force matchSignaturesCompat..."
-        smali_kit -c -m "matchSignaturesCompat" -re "$return_true" -d "$SVC_WORK_DIR" -name "PackageManagerServiceUtils.smali"
-
-        echo "[*] Patch 2.1: Skip KeySet verification..."
-        smali_kit -c -m "shouldCheckUpgradeKeySetLocked" -re "$return_false" -d "$SVC_WORK_DIR" -name "KeySetManagerService.smali"
-
-        echo "[*] Patch 3.1: Bypass Shared User Leaving Check..."
-        smali_kit -c -m "adjustScanFlags" -bl "if-eqz v3," "    const/4 v3, 0x1" -d "$SVC_WORK_DIR" -name "InstallPackageHelper.smali"
-
-        echo "[*] Patch 4.1: Enable Reconciliation Bypass..."
-        smali_kit -c -m "<clinit>" -rim "const/4 v0, 0x0" "const/4 v0, 0x1" -d "$SVC_WORK_DIR" -name "ReconcilePackageUtils.smali"
-
-        echo "[*] Recompiling services.jar..."
-        dynamic_apktool -recompile "$SVC_WORK_DIR" -o "$SERVICES"
-        [ $? -ne 0 ] && echo "[!] ERROR: services.jar recompilation failed"
-        delete_recursive "$SVC_WORK_DIR"
+        echo "[!] ERROR: services.jar workspace not found"
+        return 1
     fi
+
+    echo "[*] Applying patches to services.jar..."
+
+    echo "[*] Patch 1.1: Disable checkDowngrade..."
+    smali_kit -c -m "checkDowngrade" -re "$return_void" -d "$SVC_WORK_DIR" -name "PackageManagerServiceUtils.smali"
+
+    echo "[*] Patch 1.2: Bypass verifySignatures..."
+    smali_kit -c -m "verifySignatures" -re "$return_false" -d "$SVC_WORK_DIR" -name "PackageManagerServiceUtils.smali"
+
+    echo "[*] Patch 1.3: Bypass compareSignatures..."
+    smali_kit -c -m "compareSignatures" -re "$return_false" -d "$SVC_WORK_DIR" -name "PackageManagerServiceUtils.smali"
+
+    echo "[*] Patch 1.4: Force matchSignaturesCompat..."
+    smali_kit -c -m "matchSignaturesCompat" -re "$return_true" -d "$SVC_WORK_DIR" -name "PackageManagerServiceUtils.smali"
+
+    echo "[*] Patch 2.1: Skip KeySet verification..."
+    smali_kit -c -m "shouldCheckUpgradeKeySetLocked" -re "$return_false" -d "$SVC_WORK_DIR" -name "KeySetManagerService.smali"
+
+    echo "[*] Patch 3.1: Bypass Shared User Leaving Check..."
+    smali_kit -c -m "adjustScanFlags" -bl "if-eqz v3," "    const/4 v3, 0x1" -d "$SVC_WORK_DIR" -name "InstallPackageHelper.smali"
+
+    echo "[*] Patch 4.1: Enable Reconciliation Bypass..."
+    smali_kit -c -m "<clinit>" -rim "const/4 v0, 0x0" "const/4 v0, 0x1" -d "$SVC_WORK_DIR" -name "ReconcilePackageUtils.smali"
+
+    echo "[+] services.jar patches applied (recompilation handled centrally)"
 fi
 
 # ==================== MIUI-SERVICES.JAR ====================
 if [ -n "$MIUI_SERVICES" ]; then
-    echo "[*] Decompiling miui-services.jar..."
-    dynamic_apktool -decompile "$MIUI_SERVICES" -o "$MIUI_WORK_DIR"
+    echo "[*] Patching miui-services.jar..."
+    
+    # Get pre-decompiled workspace (managed by run.sh)
+    MIUI_WORK_DIR=$(get_workspace_path "miui-services.jar")
 
     if [ ! -d "$MIUI_WORK_DIR" ]; then
-        echo "[!] WARNING: miui-services.jar decompilation failed"
+        echo "[!] WARNING: miui-services.jar workspace not found, skipping..."
     else
         echo "[*] Applying patches to miui-services.jar..."
 
@@ -221,10 +219,7 @@ if [ -n "$MIUI_SERVICES" ]; then
         echo "[*] Patch 2: Allow Critical System App Updates..."
         smali_kit -c -m "canBeUpdate" -re "$return_void" -d "$MIUI_WORK_DIR" -name "PackageManagerServiceImpl.smali"
 
-        echo "[*] Recompiling miui-services.jar..."
-        dynamic_apktool -recompile "$MIUI_WORK_DIR" -o "$MIUI_SERVICES"
-        [ $? -ne 0 ] && echo "[!] WARNING: miui-services.jar recompilation failed"
-        delete_recursive "$MIUI_WORK_DIR"
+        echo "[+] miui-services.jar patches applied (recompilation handled centrally)"
     fi
 else
     echo "[*] miui-services.jar not found, skipping..."

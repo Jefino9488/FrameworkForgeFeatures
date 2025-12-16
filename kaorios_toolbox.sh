@@ -209,12 +209,20 @@ extract_utility_classes() {
 
 extract_utility_classes || return 1
 
-# ==================== STEP 3: DECOMPILE FRAMEWORK.JAR ====================
+# ==================== STEP 3: GET FRAMEWORK WORKSPACE ====================
 echo ""
-echo "[*] Step 3: Decompiling framework.jar..."
+echo "[*] Step 3: Getting framework.jar workspace..."
 
-mkdir -p "$FW_WORK_DIR"
-dynamic_apktool -d "$FRAMEWORK" -o "$FW_WORK_DIR" || { echo "[!] ERROR: Decompilation failed"; return 1; }
+# Get pre-decompiled workspace (managed by run.sh)
+FW_WORK_DIR=$(get_workspace_path "framework.jar")
+
+if [ ! -d "$FW_WORK_DIR" ]; then
+    echo "[!] ERROR: framework.jar workspace not found"
+    return 1
+fi
+
+echo "[+] Using workspace: $FW_WORK_DIR"
+
 
 # ==================== STEP 4: INJECT UTILITY CLASSES ====================
 echo ""
@@ -601,23 +609,9 @@ patch_instrumentation
 patch_keystore2
 patch_keystore_spi
 
-# ==================== STEP 6: RECOMPILE ====================
+# ==================== STEP 6: PATCHES COMPLETE ====================
 echo ""
-echo "[*] Step 6: Recompiling framework.jar..."
-
-# OOM mitigation: Free memory before recompilation
-sync
-echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
-
-# Use -j 2 to limit threads and prevent OOM during recompilation of large framework.jar
-# dynamic_apktool passes unrecognized flags to apktool
-# Output directly to $FRAMEWORK (DI convention - modifies input file in place)
-dynamic_apktool -r "$FW_WORK_DIR" -o "$FRAMEWORK" -j 2
-
-if [ ! -f "$FRAMEWORK" ]; then
-    echo "[!] ERROR: framework.jar recompilation failed"
-    return 1
-fi
+echo "[*] Step 6: Framework patches complete (recompilation handled centrally)"
 
 echo "[+] Kaorios Toolbox patches applied successfully!"
 
